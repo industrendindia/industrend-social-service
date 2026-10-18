@@ -31,6 +31,15 @@ class SocialMediaService {
     CompletableFuture.runAsync(()->generate(id,prompt.trim())); return get(id);
   }
 
+  Post upload(byte[] bytes,String contentType,String caption,UUID admin){
+    if(bytes==null||bytes.length==0)throw new IllegalArgumentException("Choose an image to upload");
+    if(bytes.length>10*1024*1024)throw new IllegalArgumentException("The image must be 10 MB or smaller");
+    if(!java.util.Set.of("image/jpeg","image/png","image/webp").contains(contentType))throw new IllegalArgumentException("Only JPEG, PNG and WebP images are supported");
+    var id=UUID.randomUUID();
+    jdbc.sql("insert into industrendindia.social_media_posts(social_post_id,prompt,caption,provider,status,image_bytes,image_content_type,created_by) values(:id,'Uploaded image',:c,'upload','GENERATED',:b,:t,:a)").param("id",id).param("c",caption==null?"":caption.trim()).param("b",bytes).param("t",contentType).param("a",admin).update();
+    return get(id);
+  }
+
   void generate(UUID id,String prompt){
     try{
       var key=config.required("social.google.api_key");
@@ -49,6 +58,7 @@ class SocialMediaService {
 
   Post get(UUID id){return jdbc.sql("select social_post_id,prompt,caption,status,error_message,facebook_post_id,image_bytes is not null from industrendindia.social_media_posts where social_post_id=:id").param("id",id).query((r,n)->new Post(r.getObject(1,UUID.class),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6),r.getBoolean(7))).optional().orElseThrow(()->new IllegalArgumentException("Social post was not found"));}
   byte[] image(UUID id){return jdbc.sql("select image_bytes from industrendindia.social_media_posts where social_post_id=:id and image_bytes is not null").param("id",id).query(byte[].class).optional().orElseThrow(()->new IllegalArgumentException("Generated image is not ready"));}
+  String imageContentType(UUID id){return jdbc.sql("select image_content_type from industrendindia.social_media_posts where social_post_id=:id and image_bytes is not null").param("id",id).query(String.class).optional().orElseThrow(()->new IllegalArgumentException("Image is not ready"));}
   Post review(UUID id){jdbc.sql("update industrendindia.social_media_posts set status='REVIEWED',reviewed_at=clock_timestamp(),updated_at=clock_timestamp() where social_post_id=:id and status in('GENERATED','REVIEWED')").param("id",id).update();return get(id);}
 
   Post publish(UUID id,String caption){
@@ -59,7 +69,8 @@ class SocialMediaService {
       var page=config.required("social.meta.page_id"); var token=config.required("social.meta.page_access_token"); var version=config.get("social.meta.graph_version","v24.0");
       var boundary="----IndusTrend"+UUID.randomUUID().toString().replace("-",""); var out=new ByteArrayOutputStream();
       write(out,"--"+boundary+"\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n"+finalCaption+"\r\n");
-      write(out,"--"+boundary+"\r\nContent-Disposition: form-data; name=\"source\"; filename=\"industrend.png\"\r\nContent-Type: image/png\r\n\r\n"); out.write(image(id)); write(out,"\r\n--"+boundary+"--\r\n");
+      var imageType=imageContentType(id); var extension="image/jpeg".equals(imageType)?"jpg":"image/webp".equals(imageType)?"webp":"png";
+      write(out,"--"+boundary+"\r\nContent-Disposition: form-data; name=\"source\"; filename=\"industrend."+extension+"\"\r\nContent-Type: "+imageType+"\r\n\r\n"); out.write(image(id)); write(out,"\r\n--"+boundary+"--\r\n");
       var uri=URI.create("https://graph.facebook.com/"+version+"/"+page+"/photos?published=true");
       var request=HttpRequest.newBuilder(uri).timeout(java.time.Duration.ofMinutes(2)).header("Authorization","Bearer "+token).header("Content-Type","multipart/form-data; boundary="+boundary).POST(HttpRequest.BodyPublishers.ofByteArray(out.toByteArray())).build();
       var response=http.send(request,HttpResponse.BodyHandlers.ofString()); if(response.statusCode()/100!=2)throw new IllegalStateException("Facebook returned HTTP "+response.statusCode()+": "+providerError(response.body()));

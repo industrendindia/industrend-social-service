@@ -3,6 +3,9 @@ server:
   forward-headers-strategy: framework
 spring:
   application.name: social-service
+  servlet.multipart:
+    max-file-size: 10MB
+    max-request-size: 11MB
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/industrend}
     username: ${DATABASE_USER:industrend}
